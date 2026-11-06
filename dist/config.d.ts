@@ -10,6 +10,7 @@ export interface Config {
     models: string[];
     contextWindow: number;
     contextWindows: Record<string, number>;
+    promptBudgetBytes: number;
     toolPolicy: 'bridge' | 'text-only' | 'reject';
     toolTimeoutMs: number;
     maxActiveToolSessions: number;

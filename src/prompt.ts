@@ -1,7 +1,6 @@
 import { LlmError } from '@deepseek-ai/dsh-llm';
 import type { AcpGenerateOptions as GenerateOptions } from './request.js';
 import type { Config } from './config.js';
-import { mcpToolName } from './mcp/bridge.js';
 export function buildPrompt(options: GenerateOptions, config: Config): string {
   // Host reasoning metadata accepts the request field; ACP's exact model ID
   // selects the thinking tier, so reasoningEffort is intentionally not forwarded.
@@ -22,7 +21,7 @@ export function buildPrompt(options: GenerateOptions, config: Config): string {
       'toolPolicy: reject refuses tool schemas. Use the default bridge policy to execute DSH tools.',
       'UNSUPPORTED_OPTION',
     );
-  const messages = options.messages.map((m) => ({
+  const messages: Rendered[] = options.messages.map((m) => ({
     role: m.role,
     ...(sourceKind(m) ? { source: sourceKind(m) } : {}),
     ...('toolCallId' in m ? { toolCallId: m.toolCallId, isError: m.isError ?? false } : {}),
@@ -32,10 +31,10 @@ export function buildPrompt(options: GenerateOptions, config: Config): string {
           'This version accepts text context only. Attachments must be projected by DSH before calling the adapter.',
           'UNSUPPORTED_OPTION',
         );
-      return b; // Preserve historical text, reasoning, tool calls/results and developer updates.
+      return b as Block; // Preserve historical text, reasoning, tool calls/results and developer updates.
     }),
   }));
-  return [
+  const header = [
     'DeepSeek Harness owns this conversation. Produce only the next assistant response using the supplied conversation.',
     ...(config.toolPolicy === 'bridge' && options.tools?.length
       ? [
@@ -47,27 +46,139 @@ export function buildPrompt(options: GenerateOptions, config: Config): string {
           'This is a text-only backend. Do not invoke native tools, slash commands, skills, file access, terminals, network tools, or MCP.',
           'DSH tools are unavailable on this request. If an action needs tools, explain that limitation in your answer.',
         ]),
-    'The JSON below is the complete DSH-controlled history, with roles, message sources and historical tool results. Do not repeat the transcript.',
-    JSON.stringify({
-      system: options.system ?? null,
-      messages,
-      ...(config.toolPolicy === 'bridge' && options.tools?.length
-        ? {
-            dshMcpTools: options.tools.map((tool) => ({
-              mcpServer: 'dsh-bridge',
-              mcpName: mcpToolName(tool.name),
-              dshName: tool.name,
-              description: tool.description,
-              parameters: tool.parameters,
-            })),
-          }
-        : {}),
-    }),
-    ...latestHumanRequest(options.messages),
-  ].join('\n\n');
+    'The JSON below is the DSH-controlled history, with roles, message sources and historical tool results. Long sessions are condensed to fit the input limit: old tool outputs may be shortened and the oldest middle messages omitted. Do not repeat the transcript.',
+  ];
+  const footer = latestHumanRequest(options.messages);
+  const render = (history: Rendered[]) =>
+    [
+      ...header,
+      // The MCP tool catalog is not repeated here: the server already receives
+      // every dsh-bridge tool with its schema over MCP.
+      JSON.stringify({ system: options.system ?? null, messages: history }),
+      ...footer,
+    ].join('\n\n');
+  return fitToBudget(messages, options.messages, render, config.promptBudgetBytes);
 }
 
 type PromptMessage = GenerateOptions['messages'][number];
+type Block = { type: string; text?: string; arguments?: string; [key: string]: unknown };
+type Rendered = {
+  role: string;
+  source?: string;
+  toolCallId?: string;
+  isError?: boolean;
+  content: Block[];
+};
+
+const OLD_TOOL_OUTPUT_BYTES = 4000;
+const byteLength = (s: string) => Buffer.byteLength(s, 'utf8');
+
+function shortenText(value: string, maxBytes: number): string {
+  if (byteLength(value) <= maxBytes) return value;
+  let cut = value.slice(0, maxBytes);
+  while (cut.length && byteLength(cut) > maxBytes) cut = cut.slice(0, -64);
+  return `${cut}\n…[truncated ${byteLength(value) - byteLength(cut)} bytes to fit the Antigravity input limit]`;
+}
+
+// Shortens long tool outputs and long tool-call arguments in one message.
+function shortenMessage(message: Rendered, maxBytes: number): Rendered {
+  const isToolOutput = message.role === 'tool';
+  return {
+    ...message,
+    content: message.content.map((block) => ({
+      ...block,
+      ...(isToolOutput && typeof block.text === 'string'
+        ? { text: shortenText(block.text, maxBytes) }
+        : {}),
+      ...(typeof block.arguments === 'string'
+        ? { arguments: shortenText(block.arguments, maxBytes) }
+        : {}),
+    })),
+  };
+}
+
+// Last resort for oversized preamble messages: shortens every text block too.
+function shortenAll(message: Rendered, maxBytes: number): Rendered {
+  const shortened = shortenMessage(message, maxBytes);
+  return {
+    ...shortened,
+    content: shortened.content.map((block) =>
+      typeof block.text === 'string' ? { ...block, text: shortenText(block.text, maxBytes) } : block,
+    ),
+  };
+}
+
+const isHuman = (m: PromptMessage) => m.role === 'user' && (sourceKind(m) ?? 'user') === 'user';
+
+// The official Antigravity server keeps only the first 192,000 bytes of a
+// prompt and silently drops the rest, which hid the newest messages (and the
+// human's latest request) from the model. Keep the session preamble (system
+// prompt, AGENTS.md instructions, skill catalog) and everything from the latest
+// human request onward; condense the middle, newest first.
+function fitToBudget(
+  messages: Rendered[],
+  originals: GenerateOptions['messages'],
+  render: (history: Rendered[]) => string,
+  budget: number,
+): string {
+  let prompt = render(messages);
+  if (byteLength(prompt) <= budget) return prompt;
+
+  const firstHuman = originals.findIndex(isHuman);
+  const latestHuman = originals.length - 1 - [...originals].reverse().findIndex(isHuman);
+  const hasHuman = firstHuman >= 0;
+  const preamble = hasHuman ? messages.slice(0, firstHuman) : [];
+  const tail = hasHuman ? messages.slice(latestHuman) : messages.slice(-1);
+  let middle = hasHuman
+    ? messages.slice(firstHuman, latestHuman)
+    : messages.slice(0, Math.max(0, messages.length - 1));
+
+  // 1. Shorten old tool outputs and arguments.
+  middle = middle.map((m) => shortenMessage(m, OLD_TOOL_OUTPUT_BYTES));
+  const omissionNote = (count: number): Rendered => ({
+    role: 'user',
+    source: 'dsh-antigravity-acp',
+    content: [
+      {
+        type: 'text',
+        text: `[${count} earlier messages omitted to fit the Antigravity input limit]`,
+      },
+    ],
+  });
+  const assemble = (head: Rendered[], kept: Rendered[], end: Rendered[], omitted: number) => [
+    ...head,
+    ...(omitted ? [omissionNote(omitted)] : []),
+    ...kept,
+    ...end,
+  ];
+
+  // 2. Drop the oldest middle messages until the prompt fits.
+  const sizes = middle.map((m) => byteLength(JSON.stringify(m)) + 1);
+  let omitted = 0;
+  let excess = byteLength(render(assemble(preamble, middle, tail, 0))) - budget;
+  if (excess > 0) {
+    const noteBytes = byteLength(JSON.stringify(omissionNote(middle.length))) + 1;
+    excess += noteBytes;
+    while (omitted < middle.length && excess > 0) excess -= sizes[omitted++]!;
+  }
+  let kept = middle.slice(omitted);
+  prompt = render(assemble(preamble, kept, tail, omitted));
+  while (byteLength(prompt) > budget && kept.length) {
+    kept = kept.slice(1);
+    omitted++;
+    prompt = render(assemble(preamble, kept, tail, omitted));
+  }
+
+  // 3. Still too large: shorten the current turn and the preamble progressively.
+  let head = preamble;
+  let end = tail;
+  for (let limit = 16000; byteLength(prompt) > budget && limit >= 500; limit = Math.floor(limit / 2)) {
+    end = tail.map((m, i) => (i === 0 ? m : shortenMessage(m, limit)));
+    head = preamble.map((m) => shortenAll(m, limit));
+    prompt = render(assemble(head, kept, end, omitted));
+  }
+  return prompt;
+}
 
 function sourceKind(message: PromptMessage): string | undefined {
   const source = (message as { source?: { kind?: unknown } }).source;

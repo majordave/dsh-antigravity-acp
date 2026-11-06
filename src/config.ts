@@ -10,6 +10,7 @@ export interface Config {
   models: string[];
   contextWindow: number;
   contextWindows: Record<string, number>;
+  promptBudgetBytes: number;
   toolPolicy: 'bridge' | 'text-only' | 'reject';
   toolTimeoutMs: number;
   maxActiveToolSessions: number;
@@ -34,6 +35,8 @@ export const Config: z<Config> = z.object({
   contextWindow: z.natural().default(200000),
   // Exact per-model overrides, e.g. { "gemini-3.8-flash-high": 1048576 }.
   contextWindows: z.dict(z.natural()).default({}),
+  // The official server keeps only the first 192,000 bytes of a prompt.
+  promptBudgetBytes: z.natural().default(180000),
   toolPolicy: z.union(['bridge', 'text-only', 'reject'] as const).default('bridge'),
   toolTimeoutMs: z.natural().default(900000),
   maxActiveToolSessions: z.natural().default(16),
@@ -60,6 +63,7 @@ export function resolveConfig(input: Partial<Config> = {}): Config {
     'maxActiveToolSessions',
     'idleProcessTimeoutMs',
     'contextWindow',
+    'promptBudgetBytes',
   ] as const) {
     if (!Number.isSafeInteger(config[key]) || config[key] <= 0 || config[key] > 2147483647)
       throw new Error(`${key} must be a positive integer <= 2147483647`);
