@@ -8,6 +8,10 @@ export const Config = z.object({
     auth: z.const('oauth-personal').default('oauth-personal'),
     defaultModel: z.string().default(''),
     models: z.array(z.string()).default([]),
+    // Fallback window for models outside the known Gemini/Claude/GPT-OSS families.
+    contextWindow: z.natural().default(200000),
+    // Exact per-model overrides, e.g. { "gemini-3.8-flash-high": 1048576 }.
+    contextWindows: z.dict(z.natural()).default({}),
     toolPolicy: z.union(['bridge', 'text-only', 'reject']).default('bridge'),
     toolTimeoutMs: z.natural().default(900000),
     maxActiveToolSessions: z.natural().default(16),
@@ -34,6 +38,7 @@ export function resolveConfig(input = {}) {
         'toolTimeoutMs',
         'maxActiveToolSessions',
         'idleProcessTimeoutMs',
+        'contextWindow',
     ]) {
         if (!Number.isSafeInteger(config[key]) || config[key] <= 0 || config[key] > 2147483647)
             throw new Error(`${key} must be a positive integer <= 2147483647`);

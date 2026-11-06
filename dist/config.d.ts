@@ -8,6 +8,8 @@ export interface Config {
     auth: 'oauth-personal';
     defaultModel: string;
     models: string[];
+    contextWindow: number;
+    contextWindows: Record<string, number>;
     toolPolicy: 'bridge' | 'text-only' | 'reject';
     toolTimeoutMs: number;
     maxActiveToolSessions: number;

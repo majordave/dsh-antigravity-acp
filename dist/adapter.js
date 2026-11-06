@@ -2,7 +2,7 @@ import { LlmAdapter, LlmError, ReasoningEffortId, } from '@deepseek-ai/dsh-llm';
 import { AcpClient } from './acp/client.js';
 import { EventMapper, finishReason } from './acp/events.js';
 import { aborted, classify } from './acp/errors.js';
-import { modelCatalog } from './models.js';
+import { contextWindowFor, modelCatalog } from './models.js';
 import { buildPrompt } from './prompt.js';
 import { ToolSessions } from './mcp/sessions.js';
 /**
@@ -115,6 +115,7 @@ export class AntigravityAcpAdapter extends LlmAdapter {
                 ...m,
                 provider,
                 inputModalities: ['text'],
+                contextWindow: contextWindowFor(m.id, this.config),
                 description: 'Official ACP backend with DSH tools through MCP',
                 reasoning: REASONING_META,
             }));
@@ -131,6 +132,7 @@ export class AntigravityAcpAdapter extends LlmAdapter {
             id: model,
             name: this.catalog.find((m) => m.id === model)?.name ?? model,
             inputModalities: ['text'],
+            context: { contextWindow: contextWindowFor(model, this.config) },
             reasoning: REASONING_META,
         };
     }
