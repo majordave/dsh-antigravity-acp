@@ -24,6 +24,7 @@ export function buildPrompt(options: GenerateOptions, config: Config): string {
     );
   const messages = options.messages.map((m) => ({
     role: m.role,
+    ...(sourceKind(m) ? { source: sourceKind(m) } : {}),
     ...('toolCallId' in m ? { toolCallId: m.toolCallId, isError: m.isError ?? false } : {}),
     content: m.content.map((b) => {
       if (b.type === 'image' || b.type === 'file')
@@ -46,7 +47,7 @@ export function buildPrompt(options: GenerateOptions, config: Config): string {
           'This is a text-only backend. Do not invoke native tools, slash commands, skills, file access, terminals, network tools, or MCP.',
           'DSH tools are unavailable on this request. If an action needs tools, explain that limitation in your answer.',
         ]),
-    'The JSON below is the complete DSH-controlled history, with roles and historical tool results. Answer its final user message. Do not repeat the transcript.',
+    'The JSON below is the complete DSH-controlled history, with roles, message sources and historical tool results. Do not repeat the transcript.',
     JSON.stringify({
       system: options.system ?? null,
       messages,
@@ -62,5 +63,37 @@ export function buildPrompt(options: GenerateOptions, config: Config): string {
           }
         : {}),
     }),
+    ...latestHumanRequest(options.messages),
   ].join('\n\n');
+}
+
+type PromptMessage = GenerateOptions['messages'][number];
+
+function sourceKind(message: PromptMessage): string | undefined {
+  const source = (message as { source?: { kind?: unknown } }).source;
+  return typeof source?.kind === 'string' ? source.kind : undefined;
+}
+
+function messageText(message: PromptMessage): string {
+  return message.content
+    .map((block) => ('text' in block && typeof block.text === 'string' ? block.text : ''))
+    .join('\n')
+    .trim();
+}
+
+// DSH appends user-role context (Mem0 recall, time context, reminders) after the
+// human's message, so "the final user message" is often not the request. Restate
+// the latest request after the transcript: a human message (source kind "user")
+// or a source-less request input (one-shot prompts such as titles or subagent
+// tasks). User-role messages from other producers are context, not requests.
+function latestHumanRequest(messages: GenerateOptions['messages']): string[] {
+  const human = [...messages]
+    .reverse()
+    .find((m) => m.role === 'user' && (sourceKind(m) ?? 'user') === 'user');
+  const text = human && messageText(human);
+  if (!text) return [];
+  return [
+    'Respond to the latest request from the human user, quoted below. Later user-role messages with other sources (such as mem0-recall or time-context) are background context, not requests. Earlier requests in the transcript were already answered; do not answer them again unless this message asks for it.',
+    `Latest human request:\n<<<\n${text}\n>>>`,
+  ];
 }
