@@ -140,6 +140,10 @@ function fitToBudget(messages, originals, render, budget) {
         head = preamble.map((m) => shortenAll(m, limit));
         prompt = render(assemble(head, kept, end, omitted));
     }
+    // 4. Never send an oversized prompt: the server would drop its end silently.
+    const size = byteLength(prompt);
+    if (size > budget)
+        throw new LlmError(`This request is ${Math.ceil(size / 1000)} KB even after condensing the history, above the ${Math.floor(budget / 1000)} KB Antigravity input budget (the server ignores everything past 192 KB). Shorten the latest message or attach the content as a file the model can read with tools.`, 'ACP_PROMPT_TOO_LARGE');
     return prompt;
 }
 function sourceKind(message) {
@@ -164,8 +168,15 @@ function latestHumanRequest(messages) {
     const text = human && messageText(human);
     if (!text)
         return [];
+    // A long pasted message is already in the transcript; restating it in full
+    // would double its size against the input limit, so only an excerpt repeats.
+    const excerpt = byteLength(text) > RESTATE_FULL_BYTES;
     return [
         'Respond to the latest request from the human user, quoted below. Later user-role messages with other sources (such as mem0-recall or time-context) are background context, not requests. Earlier requests in the transcript were already answered; do not answer them again unless this message asks for it.',
-        `Latest human request:\n<<<\n${text}\n>>>`,
+        excerpt
+            ? `Latest human request (excerpt; the full text is the last message with source "user" in the transcript):\n<<<\n${shortenText(text, RESTATE_EXCERPT_BYTES)}\n>>>`
+            : `Latest human request:\n<<<\n${text}\n>>>`,
     ];
 }
+const RESTATE_FULL_BYTES = 8000;
+const RESTATE_EXCERPT_BYTES = 4000;
