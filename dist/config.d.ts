@@ -22,6 +22,8 @@ export interface Config {
     cancelGraceMs: number;
     disposeGraceMs: number;
     maxSessionsPerProcess: number;
+    maxIdleConversations: number;
+    conversationIdleMs: number;
 }
 export declare const Config: z<Config>;
 export declare function resolveConfig(input?: Partial<Config>): Config;

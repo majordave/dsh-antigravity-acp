@@ -98,8 +98,16 @@ small samples are not a latency guarantee. Cold startup, fresh sessions, model
 selection and Google's generation time can still take longer.
 See the [timing record](docs/performance.md).
 
-Only an unfinished tool round trip retains ACP state. Context/model/catalog
-changes discard stale exchanges. Tool turns use separate managed processes,
+A tool turn that ends normally keeps its ACP session resting, so the next turn of
+the same DSH session sends only the new messages: the agent keeps the full
+history (no condensed resend) and the first call reads from Google's cache. It
+continues only when the earlier history, model, system prompt and tools are
+unchanged and the new messages are user input or context; otherwise the turn is
+rebuilt from DSH history. Context-only user messages that DSH adds after a tool
+result (skill catalog, Mem0 recall) reach the model inside that result. At most
+`maxIdleConversations` sessions rest, for `conversationIdleMs`; each keeps a
+server process (about 500 MB) alive. See [conversation reuse](docs/conversation-reuse.md).
+Context/model/catalog changes discard stale exchanges. Tool turns use separate managed processes,
 allowing concurrent chats and provider calls from subagent tools. Cancellation
 remains active while DSH is running a tool or awaiting approval.
 
@@ -151,6 +159,9 @@ Defaults need no changes. An advanced profile patch targets the existing row:
 | cancelGraceMs         | 1500            | Bound for sending ACP cancel                                                 |
 | disposeGraceMs        | 3000            | Managed process EOF grace                                                    |
 | maxSessionsPerProcess | 100             | Recycle retained processes between ACP sessions                              |
+| maxIdleConversations  | 2               | Completed tool-turn sessions kept for the next turn; 0 disables reuse        |
+| conversationIdleMs    | 900000          | How long a completed session waits for its next DSH turn                     |
+| conversationsDir      | empty           | Server conversation stores read for usage; empty is the default location     |
 
 Discovery order: command, AGY_ACP_BIN, PATH, known user directories, automatic
 installation. Explicit overrides are authoritative; broken paths fail clearly.
@@ -180,8 +191,9 @@ needs DSH's optional subprocess-local peer; plugin activation uses ctx.subproces
   call only, so a turn where the agent made several calls undercounts totals.
   If the store is missing or unreadable, occupancy is reported as prompt-side
   usage (inputTokens, outputTokens 0) instead; output tokens are never invented.
-  Text-only turns open a fresh ACP session each time, so they are always cold
-  (0% hits); cache hits show up across tool rounds in one session.
+  Text-only requests open a fresh ACP session each time, so they are always
+  cold (0% hits); tool turns read from cache across tool rounds and, through
+  conversation reuse, across DSH turns.
 - No durable ACP resume. Restart/provider change reconstructs from saved DSH
   history. Partially streamed requests are never automatically replayed.
 - Limits: 256 active tool definitions, 128 KiB per definition, 1 MiB MCP bodies,

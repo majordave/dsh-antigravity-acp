@@ -5,6 +5,8 @@ export declare class EventMapper {
     /** Latest ACP usage_update `used`: tokens currently occupying the context window. */
     private occupiedTokens;
     get blockCount(): number;
+    /** Assistant text streamed so far (reasoning excluded). */
+    get text(): string;
     get hasText(): boolean;
     update(update: SessionUpdate): StreamChunk[];
     /**

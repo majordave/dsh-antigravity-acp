@@ -7,6 +7,10 @@ export class EventMapper {
   get blockCount(): number {
     return this.blocks.size;
   }
+  /** Assistant text streamed so far (reasoning excluded). */
+  get text(): string {
+    return this.blocks.get('text')?.text ?? '';
+  }
   get hasText(): boolean {
     return !!this.blocks.get('text')?.text;
   }

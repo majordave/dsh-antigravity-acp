@@ -4,7 +4,7 @@ import { AcpClient } from '../acp/client.js';
 import { EventMapper, finishReason } from '../acp/events.js';
 import { lastCallUsage } from '../acp/usage-store.js';
 import { aborted, classify } from '../acp/errors.js';
-import { buildPrompt } from '../prompt.js';
+import { buildContinuationPrompt, buildPrompt, isHuman, messageText, sourceKind, } from '../prompt.js';
 import { DshMcpBridge } from './bridge.js';
 function history(messages) {
     return messages.map((m) => JSON.stringify({
@@ -28,7 +28,9 @@ const unavailable = () => ({
     ],
 });
 /** Active turns own separate ACP processes, avoiding subagent deadlocks.
- * Completed processes can stay ready; every independent turn gets a fresh ACP session.
+ * A completed turn's ACP session can rest so the next turn of the same DSH
+ * session continues it with only the new messages (see docs/conversation-reuse.md);
+ * otherwise its process returns to the ready pool and the next turn rebuilds.
  */
 export class ToolSessions {
     config;
@@ -40,6 +42,7 @@ export class ToolSessions {
     borrowedClients = new Set();
     counts = new WeakMap();
     disposed = false;
+    restOrder = 0;
     processStarts = 0;
     authentications = 0;
     generations = 0;
@@ -129,8 +132,10 @@ export class ToolSessions {
         const ids = new Set(o.messages.flatMap((m) => (m.role === 'tool' ? [m.toolCallId] : [])));
         return [...this.bindings.values()].find((b) => [...b.pending.values()].some((p) => p.exposed && ids.has(p.call.id)));
     }
+    /** True only for a turn parked on DSH tool calls; a resting conversation never reroutes. */
     has(o) {
-        return !!this.find(o);
+        const b = this.find(o);
+        return !!b && !b.resting;
     }
     deadline(b, ms, code) {
         clearTimeout(b.timer);
@@ -179,7 +184,17 @@ export class ToolSessions {
             }, 10);
         return result;
     }
+    oldestResting() {
+        let oldest;
+        for (const b of this.bindings.values())
+            if (b.resting && (!oldest || b.resting.order < oldest.resting.order))
+                oldest = b;
+        return oldest;
+    }
     async create(o) {
+        // Resting conversations yield their slots before an active turn is refused.
+        for (let oldest = this.oldestResting(); oldest && this.bindings.size >= this.config.maxActiveToolSessions; oldest = this.oldestResting())
+            await this.close(oldest, true);
         if (this.bindings.size >= this.config.maxActiveToolSessions)
             throw new LlmError('Too many active ACP tool sessions. Finish or cancel an existing turn.', 'ACP_SESSION_LIMIT');
         const key = o.sessionId && !o.purpose ? o.sessionId : randomUUID();
@@ -250,7 +265,68 @@ export class ToolSessions {
         return (signature(o) === b.signature &&
             current.length >= b.history.length &&
             b.history.every((m, i) => m === current[i]) &&
-            !o.messages.slice(b.history.length).some((m) => m.role === 'user'));
+            // Context-only user messages (skill catalog, Mem0 recall, time) ride along
+            // with the tool results; only a human message starts a new turn.
+            !o.messages.slice(b.history.length).some(isHuman));
+    }
+    /**
+     * The DSH messages added since a resting conversation's last reply, when the
+     * new request extends exactly what that ACP session already holds.
+     */
+    continuation(b, o) {
+        if (!b.resting || signature(o) !== b.signature || !b.client.connected)
+            return undefined;
+        const current = history(o.messages);
+        if (current.length < b.history.length + 2)
+            return undefined;
+        if (!b.history.every((m, i) => m === current[i]))
+            return undefined;
+        const [reply, ...added] = o.messages.slice(b.history.length);
+        if (reply?.role !== 'assistant' || reply.content.some((c) => c.type === 'tool-call'))
+            return undefined;
+        const text = reply.content
+            .map((c) => (c.type === 'text' ? c.text : ''))
+            .join('')
+            .trim();
+        if (text !== b.resting.reply)
+            return undefined;
+        if (added.some((m) => m.role !== 'user'))
+            return undefined;
+        return added;
+    }
+    /** Reopen a resting conversation for the next DSH turn. */
+    wake(b, o) {
+        clearTimeout(b.timer);
+        b.resting = undefined;
+        b.done = false;
+        b.stop = '';
+        b.error = undefined;
+        b.history = history(o.messages);
+        this.watch(b, o.signal);
+    }
+    /** Keep a completed turn's ACP session for the next turn of the same DSH session. */
+    rest(b, reply) {
+        clearTimeout(b.timer);
+        // The finished request's abort signal must not tear down the resting session.
+        b.listeners.splice(0).forEach((remove) => remove());
+        b.resting = { reply: reply.trim(), order: this.restOrder++ };
+        b.timer = setTimeout(() => void this.close(b, true).catch(() => { }), this.config.conversationIdleMs);
+        b.timer.unref();
+        let resting = [...this.bindings.values()].filter((x) => x.resting).length;
+        for (let oldest = this.oldestResting(); oldest && resting > this.config.maxIdleConversations; oldest = this.oldestResting()) {
+            void this.close(oldest, true).catch(() => { });
+            resting--;
+        }
+    }
+    canRest(b, o) {
+        return (this.config.maxIdleConversations > 0 &&
+            !this.disposed &&
+            !o.purpose &&
+            !!o.sessionId &&
+            b.key === o.sessionId &&
+            this.bindings.get(b.key) === b &&
+            !b.pending.size &&
+            b.client.connected);
     }
     resume(b, o) {
         const tail = o.messages.slice(b.history.length);
@@ -280,6 +356,16 @@ export class ToolSessions {
         });
         if (!exposed.length)
             throw new LlmError('The ACP session has no exposed calls to resume.', 'ACP_SESSION_BUSY');
+        // ACP has no channel for user messages mid-prompt: context DSH added after
+        // the call reaches the model inside the last tool result instead.
+        const context = tail.filter((m) => m.role === 'user' && !isHuman(m));
+        const last = results.at(-1)?.result;
+        if (last)
+            for (const m of context)
+                last.content.push({
+                    type: 'text',
+                    text: `[DSH context added after this tool result (source: ${sourceKind(m) ?? 'unknown'})]\n${messageText(m)}`,
+                });
         b.history = history(o.messages);
         for (const { pending, result } of results) {
             b.pending.delete(pending.call.id);
@@ -302,10 +388,23 @@ export class ToolSessions {
         }
         catch (error) {
             if (b)
-                await this.close(b);
+                await this.close(b, !!b.resting);
             throw error;
         }
-        if (b && !this.matches(b, o)) {
+        if (b?.resting) {
+            const added = this.continuation(b, o);
+            const continued = added && buildContinuationPrompt(o, added, this.config);
+            if (continued) {
+                this.wake(b, o);
+                prompt = continued;
+            }
+            else {
+                await this.close(b, true); // Diverged, expired or too large: rebuild from DSH history.
+                b = undefined;
+            }
+            fresh = true;
+        }
+        else if (b && !this.matches(b, o)) {
             await this.close(b);
             b = undefined;
             fresh = true;
@@ -385,8 +484,13 @@ export class ToolSessions {
             clearTimeout(w.batch);
             if (b.writer === w)
                 b.writer = undefined;
-            if (!parked)
-                await this.close(b, completed && !o.signal?.aborted && !b.error);
+            const clean = completed && !o.signal?.aborted && !b.error;
+            if (!parked) {
+                if (clean && this.canRest(b, o))
+                    this.rest(b, w.mapper.text);
+                else
+                    await this.close(b, clean);
+            }
         }
     }
     async close(b, reusable = false) {

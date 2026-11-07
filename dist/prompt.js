@@ -11,16 +11,7 @@ export function buildPrompt(options, config) {
     if (config.toolPolicy === 'reject' &&
         (options.tools?.length || options.toolHistory?.tools.length))
         throw new LlmError('toolPolicy: reject refuses tool schemas. Use the default bridge policy to execute DSH tools.', 'UNSUPPORTED_OPTION');
-    const messages = options.messages.map((m) => ({
-        role: m.role,
-        ...(sourceKind(m) ? { source: sourceKind(m) } : {}),
-        ...('toolCallId' in m ? { toolCallId: m.toolCallId, isError: m.isError ?? false } : {}),
-        content: m.content.map((b) => {
-            if (b.type === 'image' || b.type === 'file')
-                throw new LlmError('This version accepts text context only. Attachments must be projected by DSH before calling the adapter.', 'UNSUPPORTED_OPTION');
-            return b; // Preserve historical text, reasoning, tool calls/results and developer updates.
-        }),
-    }));
+    const messages = renderMessages(options.messages);
     const header = [
         'DeepSeek Harness owns this conversation. Produce only the next assistant response using the supplied conversation.',
         ...(config.toolPolicy === 'bridge' && options.tools?.length
@@ -44,6 +35,40 @@ export function buildPrompt(options, config) {
         ...footer,
     ].join('\n\n');
     return fitToBudget(messages, options.messages, render, config.promptBudgetBytes);
+}
+/**
+ * Prompt for a resting ACP session that already holds the earlier history:
+ * only the DSH messages added since the agent's last reply. Returns undefined
+ * when they do not fit the input budget, so the caller rebuilds instead.
+ */
+export function buildContinuationPrompt(options, added, config) {
+    const tools = config.toolPolicy === 'bridge' && !!options.tools?.length;
+    const footer = latestHumanRequest(added);
+    const prompt = [
+        'DeepSeek Harness continues this conversation. The JSON below holds only the DSH messages added since your last reply, with roles and message sources; everything before them is already in this conversation.',
+        tools
+            ? 'The same rules apply: use only tools supplied by the dsh-bridge MCP server, never built-in Antigravity tools.'
+            : 'The same rules apply: this is a text-only backend without tools.',
+        JSON.stringify({ messages: renderMessages(added) }),
+        ...(footer.length
+            ? footer
+            : [
+                'No new human request arrived: these are context updates from DSH (such as subagent results or reminders). Respond to them as the conversation requires.',
+            ]),
+    ].join('\n\n');
+    return byteLength(prompt) <= config.promptBudgetBytes ? prompt : undefined;
+}
+function renderMessages(messages) {
+    return messages.map((m) => ({
+        role: m.role,
+        ...(sourceKind(m) ? { source: sourceKind(m) } : {}),
+        ...('toolCallId' in m ? { toolCallId: m.toolCallId, isError: m.isError ?? false } : {}),
+        content: m.content.map((b) => {
+            if (b.type === 'image' || b.type === 'file')
+                throw new LlmError('This version accepts text context only. Attachments must be projected by DSH before calling the adapter.', 'UNSUPPORTED_OPTION');
+            return b; // Preserve historical text, reasoning, tool calls/results and developer updates.
+        }),
+    }));
 }
 const OLD_TOOL_OUTPUT_BYTES = 4000;
 const byteLength = (s) => Buffer.byteLength(s, 'utf8');
@@ -76,10 +101,12 @@ function shortenAll(message, maxBytes) {
     const shortened = shortenMessage(message, maxBytes);
     return {
         ...shortened,
-        content: shortened.content.map((block) => typeof block.text === 'string' ? { ...block, text: shortenText(block.text, maxBytes) } : block),
+        content: shortened.content.map((block) => typeof block.text === 'string'
+            ? { ...block, text: shortenText(block.text, maxBytes) }
+            : block),
     };
 }
-const isHuman = (m) => m.role === 'user' && (sourceKind(m) ?? 'user') === 'user';
+export const isHuman = (m) => m.role === 'user' && (sourceKind(m) ?? 'user') === 'user';
 // The official Antigravity server keeps only the first 192,000 bytes of a
 // prompt and silently drops the rest, which hid the newest messages (and the
 // human's latest request) from the model. Keep the session preamble (system
@@ -146,11 +173,11 @@ function fitToBudget(messages, originals, render, budget) {
         throw new LlmError(`This request is ${Math.ceil(size / 1000)} KB even after condensing the history, above the ${Math.floor(budget / 1000)} KB Antigravity input budget (the server ignores everything past 192 KB). Shorten the latest message or attach the content as a file the model can read with tools.`, 'ACP_PROMPT_TOO_LARGE');
     return prompt;
 }
-function sourceKind(message) {
+export function sourceKind(message) {
     const source = message.source;
     return typeof source?.kind === 'string' ? source.kind : undefined;
 }
-function messageText(message) {
+export function messageText(message) {
     return message.content
         .map((block) => ('text' in block && typeof block.text === 'string' ? block.text : ''))
         .join('\n')

@@ -27,6 +27,11 @@ export const Config = z.object({
     cancelGraceMs: z.natural().default(1500),
     disposeGraceMs: z.natural().default(3000),
     maxSessionsPerProcess: z.natural().default(100),
+    // ACP sessions kept after a DSH turn ends, so the next turn sends only new
+    // messages (cache hits, no condensed resend). Each keeps a server process
+    // (~500 MB) alive; 0 disables reuse.
+    maxIdleConversations: z.natural().default(2),
+    conversationIdleMs: z.natural().default(900000),
 });
 export function resolveConfig(input = {}) {
     const config = Config(input);
@@ -45,6 +50,7 @@ export function resolveConfig(input = {}) {
         'idleProcessTimeoutMs',
         'contextWindow',
         'promptBudgetBytes',
+        'conversationIdleMs',
     ]) {
         if (!Number.isSafeInteger(config[key]) || config[key] <= 0 || config[key] > 2147483647)
             throw new Error(`${key} must be a positive integer <= 2147483647`);

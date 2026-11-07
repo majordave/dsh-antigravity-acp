@@ -109,6 +109,19 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
       });
       return;
     }
+    if (
+      variant === 'bridge-chat' &&
+      bridges.get(sid)?.length &&
+      !p.prompt[0].text.includes('CALL_TOOL')
+    ) {
+      // Echo which ACP session answered and exactly what it was sent.
+      update(sid, {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'SID=' + sid + '\n' + p.prompt[0].text },
+      });
+      ok({ stopReason: 'end_turn' });
+      return;
+    }
     if (variant.startsWith('bridge') && bridges.get(sid)?.length) {
       const descriptor = bridges.get(sid)[0];
       const mcp = new Client({ name: 'fake-acp', version: '1' });
@@ -159,7 +172,10 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
         update(sid, { sessionUpdate: 'usage_update', used: 40, size: 200000 });
         update(sid, {
           sessionUpdate: 'agent_message_chunk',
-          content: { type: 'text', text: 'PROMPTS=' + prompts + ' RESULT=' + result },
+          content: {
+            type: 'text',
+            text: 'SID=' + sid + ' PROMPTS=' + prompts + ' RESULT=' + result,
+          },
         });
         ok({ stopReason: 'end_turn' });
       } finally {

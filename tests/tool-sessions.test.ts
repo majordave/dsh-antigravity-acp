@@ -34,6 +34,8 @@ function fixture(variant = 'bridge', extra = {}) {
       requestTimeoutMs: 3000,
       timeoutMs: 3000,
       disposeGraceMs: 100,
+      // These cases pin the per-turn session lifecycle; conversation reuse has its own suite.
+      maxIdleConversations: 0,
       ...extra,
     }),
     runtime,

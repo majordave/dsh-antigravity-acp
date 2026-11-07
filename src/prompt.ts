@@ -21,19 +21,7 @@ export function buildPrompt(options: GenerateOptions, config: Config): string {
       'toolPolicy: reject refuses tool schemas. Use the default bridge policy to execute DSH tools.',
       'UNSUPPORTED_OPTION',
     );
-  const messages: Rendered[] = options.messages.map((m) => ({
-    role: m.role,
-    ...(sourceKind(m) ? { source: sourceKind(m) } : {}),
-    ...('toolCallId' in m ? { toolCallId: m.toolCallId, isError: m.isError ?? false } : {}),
-    content: m.content.map((b) => {
-      if (b.type === 'image' || b.type === 'file')
-        throw new LlmError(
-          'This version accepts text context only. Attachments must be projected by DSH before calling the adapter.',
-          'UNSUPPORTED_OPTION',
-        );
-      return b as Block; // Preserve historical text, reasoning, tool calls/results and developer updates.
-    }),
-  }));
+  const messages = renderMessages(options.messages);
   const header = [
     'DeepSeek Harness owns this conversation. Produce only the next assistant response using the supplied conversation.',
     ...(config.toolPolicy === 'bridge' && options.tools?.length
@@ -58,6 +46,49 @@ export function buildPrompt(options: GenerateOptions, config: Config): string {
       ...footer,
     ].join('\n\n');
   return fitToBudget(messages, options.messages, render, config.promptBudgetBytes);
+}
+
+/**
+ * Prompt for a resting ACP session that already holds the earlier history:
+ * only the DSH messages added since the agent's last reply. Returns undefined
+ * when they do not fit the input budget, so the caller rebuilds instead.
+ */
+export function buildContinuationPrompt(
+  options: GenerateOptions,
+  added: GenerateOptions['messages'],
+  config: Config,
+): string | undefined {
+  const tools = config.toolPolicy === 'bridge' && !!options.tools?.length;
+  const footer = latestHumanRequest(added);
+  const prompt = [
+    'DeepSeek Harness continues this conversation. The JSON below holds only the DSH messages added since your last reply, with roles and message sources; everything before them is already in this conversation.',
+    tools
+      ? 'The same rules apply: use only tools supplied by the dsh-bridge MCP server, never built-in Antigravity tools.'
+      : 'The same rules apply: this is a text-only backend without tools.',
+    JSON.stringify({ messages: renderMessages(added) }),
+    ...(footer.length
+      ? footer
+      : [
+          'No new human request arrived: these are context updates from DSH (such as subagent results or reminders). Respond to them as the conversation requires.',
+        ]),
+  ].join('\n\n');
+  return byteLength(prompt) <= config.promptBudgetBytes ? prompt : undefined;
+}
+
+function renderMessages(messages: GenerateOptions['messages']): Rendered[] {
+  return messages.map((m) => ({
+    role: m.role,
+    ...(sourceKind(m) ? { source: sourceKind(m) } : {}),
+    ...('toolCallId' in m ? { toolCallId: m.toolCallId, isError: m.isError ?? false } : {}),
+    content: m.content.map((b) => {
+      if (b.type === 'image' || b.type === 'file')
+        throw new LlmError(
+          'This version accepts text context only. Attachments must be projected by DSH before calling the adapter.',
+          'UNSUPPORTED_OPTION',
+        );
+      return b as Block; // Preserve historical text, reasoning, tool calls/results and developer updates.
+    }),
+  }));
 }
 
 type PromptMessage = GenerateOptions['messages'][number];
@@ -103,12 +134,15 @@ function shortenAll(message: Rendered, maxBytes: number): Rendered {
   return {
     ...shortened,
     content: shortened.content.map((block) =>
-      typeof block.text === 'string' ? { ...block, text: shortenText(block.text, maxBytes) } : block,
+      typeof block.text === 'string'
+        ? { ...block, text: shortenText(block.text, maxBytes) }
+        : block,
     ),
   };
 }
 
-const isHuman = (m: PromptMessage) => m.role === 'user' && (sourceKind(m) ?? 'user') === 'user';
+export const isHuman = (m: PromptMessage) =>
+  m.role === 'user' && (sourceKind(m) ?? 'user') === 'user';
 
 // The official Antigravity server keeps only the first 192,000 bytes of a
 // prompt and silently drops the rest, which hid the newest messages (and the
@@ -172,7 +206,11 @@ function fitToBudget(
   // 3. Still too large: shorten the current turn and the preamble progressively.
   let head = preamble;
   let end = tail;
-  for (let limit = 16000; byteLength(prompt) > budget && limit >= 500; limit = Math.floor(limit / 2)) {
+  for (
+    let limit = 16000;
+    byteLength(prompt) > budget && limit >= 500;
+    limit = Math.floor(limit / 2)
+  ) {
     end = tail.map((m, i) => (i === 0 ? m : shortenMessage(m, limit)));
     head = preamble.map((m) => shortenAll(m, limit));
     prompt = render(assemble(head, kept, end, omitted));
@@ -188,12 +226,12 @@ function fitToBudget(
   return prompt;
 }
 
-function sourceKind(message: PromptMessage): string | undefined {
+export function sourceKind(message: PromptMessage): string | undefined {
   const source = (message as { source?: { kind?: unknown } }).source;
   return typeof source?.kind === 'string' ? source.kind : undefined;
 }
 
-function messageText(message: PromptMessage): string {
+export function messageText(message: PromptMessage): string {
   return message.content
     .map((block) => ('text' in block && typeof block.text === 'string' ? block.text : ''))
     .join('\n')
