@@ -1,6 +1,7 @@
 import { LlmAdapter, LlmError, ReasoningEffortId, } from '@deepseek-ai/dsh-llm';
 import { AcpClient } from './acp/client.js';
 import { EventMapper, finishReason } from './acp/events.js';
+import { lastCallUsage } from './acp/usage-store.js';
 import { aborted, classify } from './acp/errors.js';
 import { contextWindowFor, modelCatalog } from './models.js';
 import { buildPrompt } from './prompt.js';
@@ -224,8 +225,8 @@ export class AntigravityAcpAdapter extends LlmAdapter {
             if (!mapper.hasText && stop === 'end_turn')
                 throw new LlmError('Official ACP server ended the turn without assistant text.', 'EMPTY_RESPONSE');
             yield* mapper.end();
-            // ACP usage_update is context occupancy, reported prompt-side for DSH's meter.
-            yield* mapper.usage();
+            // Per-call usage (with cache hits) from the server's store; occupancy otherwise.
+            yield* mapper.usage(lastCallUsage(this.config.conversationsDir, sessionId));
             completed = stop === 'end_turn';
             yield { type: 'finish', reason: finishReason(stop) };
         }

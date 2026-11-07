@@ -9,6 +9,9 @@ import {
   type ToolCallBlock,
 } from '@deepseek-ai/dsh-llm';
 import { fileURLToPath } from 'node:url';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { AntigravityAcpAdapter } from '../src/adapter.js';
 import { resolveConfig } from '../src/config.js';
 import { AcpClient } from '../src/acp/client.js';
@@ -276,6 +279,30 @@ describe('DSH tool round trips over ACP + MCP', () => {
     expect(second.status).toBe('rejected');
     if (second.status === 'rejected')
       expect(second.reason).toMatchObject({ code: 'ACP_SESSION_LIMIT' });
+  });
+  it('reports per-call cache hits on both the tool-call turn and the resumed turn', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'acp-conversations-'));
+    try {
+      const server = fileURLToPath(new URL('./fake-acp-server.mjs', import.meta.url));
+      const { adapter, options } = fixture('bridge', {
+        args: [server, 'bridge', dir],
+        conversationsDir: dir,
+      });
+      const first = await collect(adapter, options);
+      expect(first.at(-1)).toEqual({ type: 'finish', reason: { kind: 'tool-calls' } });
+      expect(first.at(-2)).toEqual({
+        type: 'usage',
+        usage: { inputTokens: 900, outputTokens: 30, cacheReadTokens: 0, reasoningTokens: 20 },
+      });
+      const next = await collect(adapter, answer(options, first));
+      expect(next.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } });
+      expect(next.at(-2)).toEqual({
+        type: 'usage',
+        usage: { inputTokens: 60, outputTokens: 12, cacheReadTokens: 930 },
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
   it('emits real DSH tool chunks and resumes the same pending ACP prompt with its result', async () => {
     const { adapter, options } = fixture();

@@ -3,6 +3,9 @@ import { Context } from '@deepseek-ai/cordis';
 import { LocalSubprocessRuntime } from '@deepseek-ai/dsh-subprocess-local';
 import { createMessage, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm';
 import { fileURLToPath } from 'node:url';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { AntigravityAcpAdapter } from '../src/adapter.js';
 import { resolveConfig } from '../src/config.js';
 const live: AntigravityAcpAdapter[] = [];
@@ -75,6 +78,22 @@ describe('official ACP provider contract (fake server)', () => {
     // usage_update is context occupancy: reported prompt-side so DSH can meter the window.
     expect(chunks.at(-2)).toEqual({ type: 'usage', usage: { inputTokens: 25, outputTokens: 0 } });
     expect(chunks.filter((c) => c.type === 'block-end')).toHaveLength(2);
+  });
+  it('reports the cache hits of the model call from the official conversation store', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'acp-conversations-'));
+    try {
+      const server = fileURLToPath(new URL('./fake-acp-server.mjs', import.meta.url));
+      const chunks = await collect(
+        adapter('normal', { args: [server, 'normal', dir], conversationsDir: dir }),
+      );
+      expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } });
+      expect(chunks.at(-2)).toEqual({
+        type: 'usage',
+        usage: { inputTokens: 20, outputTokens: 5, cacheReadTokens: 80 },
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
   it('delivers first delta before prompt RPC finishes', async () => {
     const stream = adapter().stream(options())[Symbol.asyncIterator]();

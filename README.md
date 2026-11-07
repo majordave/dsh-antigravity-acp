@@ -170,10 +170,18 @@ needs DSH's optional subprocess-local peer; plugin activation uses ctx.subproces
   agent's own system instructions remain; ACP is not a raw model API.
 - temperature, maxTokens, stop and explicit reasoningEffort fail with
   UNSUPPORTED_OPTION. Choose an announced model variant for its reasoning tier.
-- usage_update measures context occupancy. The latest value is reported to DSH
-  as prompt-side usage (inputTokens, outputTokens 0) right before finish, so the
-  context meters and compaction pressure have a reading. It is occupancy, not a
-  bill: session token totals sum it per request. Output tokens are not invented.
+- Usage and cache hits: ACP streams only usage_update (context occupancy) and the
+  official server sends no per-turn usage, so cache hits never reach the wire.
+  Right before finish the plugin reads the latest model call of the session from
+  the server's own store (`conversationsDir`, default
+  `~/.gemini/antigravity-acp/conversations/<sessionId>.db`, table
+  `gen_metadata`) and reports uncached input, `cacheReadTokens`, output and
+  reasoning, which feeds DSH's `/cost` cache hit rate. It reports the latest
+  call only, so a turn where the agent made several calls undercounts totals.
+  If the store is missing or unreadable, occupancy is reported as prompt-side
+  usage (inputTokens, outputTokens 0) instead; output tokens are never invented.
+  Text-only turns open a fresh ACP session each time, so they are always cold
+  (0% hits); cache hits show up across tool rounds in one session.
 - No durable ACP resume. Restart/provider change reconstructs from saved DSH
   history. Partially streamed requests are never automatically replayed.
 - Limits: 256 active tool definitions, 128 KiB per definition, 1 MiB MCP bodies,

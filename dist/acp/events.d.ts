@@ -1,5 +1,5 @@
 import type { SessionUpdate } from '@agentclientprotocol/sdk';
-import type { StreamChunk, FinishReason } from '@deepseek-ai/dsh-llm';
+import type { StreamChunk, FinishReason, TokenUsage } from '@deepseek-ai/dsh-llm';
 export declare class EventMapper {
     private blocks;
     /** Latest ACP usage_update `used`: tokens currently occupying the context window. */
@@ -8,7 +8,11 @@ export declare class EventMapper {
     get hasText(): boolean;
     update(update: SessionUpdate): StreamChunk[];
     /**
-     * The context occupancy as a DSH usage chunk, emitted just before `finish`.
+     * The usage chunk emitted just before `finish`.
+     *
+     * `call` is the per-call usage from the official conversation store (input,
+     * cache hits, output); it is preferred because it is the only source of the
+     * cache hit rate. Without it, context occupancy is reported instead.
      *
      * ACP's usage_update is occupancy, not billing. DSH's token meter reads the
      * prompt side of usage (input + cache) as context pressure, so occupancy is
@@ -17,7 +21,7 @@ export declare class EventMapper {
      * occupancy may already include the reply, so the next-request projection can
      * run slightly high; that errs toward compacting early, never late.
      */
-    usage(): StreamChunk[];
+    usage(call?: TokenUsage): StreamChunk[];
     end(): StreamChunk[];
 }
 export declare function finishReason(reason: string): FinishReason;

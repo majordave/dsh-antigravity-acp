@@ -11,6 +11,7 @@ export interface Config {
   contextWindow: number;
   contextWindows: Record<string, number>;
   promptBudgetBytes: number;
+  conversationsDir: string;
   toolPolicy: 'bridge' | 'text-only' | 'reject';
   toolTimeoutMs: number;
   maxActiveToolSessions: number;
@@ -37,6 +38,9 @@ export const Config: z<Config> = z.object({
   contextWindows: z.dict(z.natural()).default({}),
   // The official server keeps only the first 192,000 bytes of a prompt.
   promptBudgetBytes: z.natural().default(180000),
+  // Official server's per-session SQLite stores, read for per-call cache hits.
+  // Empty means ~/.gemini/antigravity-acp/conversations of the current user.
+  conversationsDir: z.string().default(''),
   toolPolicy: z.union(['bridge', 'text-only', 'reject'] as const).default('bridge'),
   toolTimeoutMs: z.natural().default(900000),
   maxActiveToolSessions: z.natural().default(16),

@@ -11,6 +11,7 @@ export interface Config {
     contextWindow: number;
     contextWindows: Record<string, number>;
     promptBudgetBytes: number;
+    conversationsDir: string;
     toolPolicy: 'bridge' | 'text-only' | 'reject';
     toolTimeoutMs: number;
     maxActiveToolSessions: number;

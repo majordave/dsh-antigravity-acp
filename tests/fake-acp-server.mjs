@@ -1,10 +1,16 @@
 import { createInterface } from 'node:readline';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { genMetadataRecord, writeConversation } from './gen-metadata-fixture.mjs';
 const bridges = new Map(),
   replies = new Map();
 let prompts = 0;
 const variant = process.argv[2] ?? 'normal';
+// Optional conversation store, written like the official server's per-call usage.
+const conversations = process.argv[3];
+const recordCall = (sid, usage) => {
+  if (conversations) writeConversation(conversations, sid, [genMetadataRecord(usage)]);
+};
 let sessions = 0,
   authCalls = 0,
   active = new Map(),
@@ -123,6 +129,7 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
           kind: 'other',
           _meta: { mcp: { server: 'dsh-bridge', tool: tools[0].name }, is_mcp_tool_call: true },
         };
+        recordCall(sid, { input: 900, output: 30, reasoning: 20 });
         update(sid, { sessionUpdate: 'tool_call', ...toolCall });
         const rid = 'permission-' + path;
         const permission = new Promise((resolve) => replies.set(rid, resolve));
@@ -148,6 +155,7 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
         else if (variant === 'bridge-sequential')
           result = (await call('first')) + '|' + (await call('second'));
         else result = await call('x');
+        recordCall(sid, { input: 60, output: 12, cacheRead: 930 });
         update(sid, { sessionUpdate: 'usage_update', used: 40, size: 200000 });
         update(sid, {
           sessionUpdate: 'agent_message_chunk',
@@ -216,6 +224,7 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
       sessionUpdate: 'agent_message_chunk',
       content: { type: 'text', text: variant === 'echo' ? prompt : 'world' },
     });
+    recordCall(sid, { input: 20, output: 5, cacheRead: 80 });
     update(sid, { sessionUpdate: 'usage_update', used: 25, size: 200000 });
     ok({ stopReason: variant === 'refusal' ? 'refusal' : 'end_turn' });
   }

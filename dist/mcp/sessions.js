@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { LlmError, } from '@deepseek-ai/dsh-llm';
 import { AcpClient } from '../acp/client.js';
 import { EventMapper, finishReason } from '../acp/events.js';
+import { lastCallUsage } from '../acp/usage-store.js';
 import { aborted, classify } from '../acp/errors.js';
 import { buildPrompt } from '../prompt.js';
 import { DshMcpBridge } from './bridge.js';
@@ -360,7 +361,7 @@ export class ToolSessions {
                     }
                     parked = true;
                     this.deadline(b, this.config.toolTimeoutMs, 'ACP_TOOL_TIMEOUT');
-                    yield* w.mapper.usage();
+                    yield* w.mapper.usage(lastCallUsage(this.config.conversationsDir, b.sessionId));
                     yield { type: 'finish', reason: { kind: 'tool-calls' } };
                     return;
                 }
@@ -373,7 +374,7 @@ export class ToolSessions {
             if (!w.mapper.hasText && b.stop === 'end_turn')
                 throw new LlmError('Official ACP server ended without assistant text.', 'EMPTY_RESPONSE');
             yield* w.mapper.end();
-            yield* w.mapper.usage();
+            yield* w.mapper.usage(lastCallUsage(this.config.conversationsDir, b.sessionId));
             completed = b.stop === 'end_turn';
             yield { type: 'finish', reason: finishReason(b.stop) };
         }
