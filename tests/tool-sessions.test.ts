@@ -285,8 +285,10 @@ describe('DSH tool round trips over ACP + MCP', () => {
       expect.objectContaining({ type: 'tool-call', name: 'read_file', arguments: '{"path":"x"}' }),
     ]);
     expect(first.some((c) => c.type === 'tool-call-delta' && c.id === 'native-x')).toBe(false);
+    expect(first.some((c) => c.type === 'usage')).toBe(false); // No occupancy reported yet.
     const next = await collect(adapter, answer(options, first));
     expect(next.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } });
+    expect(next.at(-2)).toEqual({ type: 'usage', usage: { inputTokens: 40, outputTokens: 0 } });
     expect(
       next
         .filter((c) => c.type === 'text-delta')

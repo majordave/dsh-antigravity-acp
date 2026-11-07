@@ -72,7 +72,8 @@ describe('official ACP provider contract (fake server)', () => {
     ).toBe('Olá world');
     expect(chunks).toContainEqual({ type: 'reasoning-delta', index: 0, text: 'Thinking' });
     expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } });
-    expect(chunks.some((c) => c.type === 'usage')).toBe(false); // usage_update is context size, not billable tokens.
+    // usage_update is context occupancy: reported prompt-side so DSH can meter the window.
+    expect(chunks.at(-2)).toEqual({ type: 'usage', usage: { inputTokens: 25, outputTokens: 0 } });
     expect(chunks.filter((c) => c.type === 'block-end')).toHaveLength(2);
   });
   it('delivers first delta before prompt RPC finishes', async () => {

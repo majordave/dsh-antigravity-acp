@@ -1,5 +1,7 @@
 export class EventMapper {
     blocks = new Map();
+    /** Latest ACP usage_update `used`: tokens currently occupying the context window. */
+    occupiedTokens;
     get blockCount() {
         return this.blocks.size;
     }
@@ -7,6 +9,12 @@ export class EventMapper {
         return !!this.blocks.get('text')?.text;
     }
     update(update) {
+        if (update.sessionUpdate === 'usage_update') {
+            const used = update.used;
+            if (typeof used === 'number' && Number.isSafeInteger(used) && used >= 0)
+                this.occupiedTokens = used;
+            return [];
+        }
         if (update.sessionUpdate !== 'agent_message_chunk' &&
             update.sessionUpdate !== 'agent_thought_chunk')
             return [];
@@ -25,6 +33,21 @@ export class EventMapper {
             ? { type: 'text-delta', index: block.index, text: update.content.text }
             : { type: 'reasoning-delta', index: block.index, text: update.content.text });
         return chunks;
+    }
+    /**
+     * The context occupancy as a DSH usage chunk, emitted just before `finish`.
+     *
+     * ACP's usage_update is occupancy, not billing. DSH's token meter reads the
+     * prompt side of usage (input + cache) as context pressure, so occupancy is
+     * reported there and output stays 0 instead of being invented. Without it the
+     * DSH context meters and compaction pressure have no reading at all. The
+     * occupancy may already include the reply, so the next-request projection can
+     * run slightly high; that errs toward compacting early, never late.
+     */
+    usage() {
+        if (this.occupiedTokens === undefined)
+            return [];
+        return [{ type: 'usage', usage: { inputTokens: this.occupiedTokens, outputTokens: 0 } }];
     }
     end() {
         return [...this.blocks].map(([type, b]) => ({

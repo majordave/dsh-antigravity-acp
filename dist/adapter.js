@@ -224,7 +224,8 @@ export class AntigravityAcpAdapter extends LlmAdapter {
             if (!mapper.hasText && stop === 'end_turn')
                 throw new LlmError('Official ACP server ended the turn without assistant text.', 'EMPTY_RESPONSE');
             yield* mapper.end();
-            // ACP usage_update reports current context occupancy, not per-call token billing.
+            // ACP usage_update is context occupancy, reported prompt-side for DSH's meter.
+            yield* mapper.usage();
             completed = stop === 'end_turn';
             yield { type: 'finish', reason: finishReason(stop) };
         }

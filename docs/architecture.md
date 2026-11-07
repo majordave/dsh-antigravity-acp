@@ -121,6 +121,7 @@ Google binary redistribution occurs.
 
 ACP text/thought chunks map to stable DSH block indexes. Blocks close before the
 single terminal finish. Tool blocks use subsequent indexes. usage_update is
-context occupancy, not billable counters, so usage is not invented. Unsupported
+context occupancy; its latest value is emitted as prompt-side usage
+(outputTokens 0) before finish so DSH's token meter can project pressure. Unsupported
 sampling controls and unprojected binary inputs fail explicitly. Raw remote
 errors and stderr are not logged; errors expose sanitized LlmError codes.

@@ -97,8 +97,9 @@ anunciada; o plugin não promete confinamento absoluto do executável do Google.
 
 Texto e reasoning são suportados. Imagens/áudio binários, controles temperature,
 maxTokens, stop e reasoningEffort explícito não estão implementados. Escolha um
-modelo anunciado para seu tier de reasoning. Tokens de faturamento não são
-inventados a partir de ocupação de contexto. Reinícios retomam o histórico salvo
+modelo anunciado para seu tier de reasoning. A ocupação de contexto (usage_update)
+é reportada ao DSH como uso do lado do prompt (outputTokens 0), para os
+medidores de contexto; tokens de saída não são inventados. Reinícios retomam o histórico salvo
 no DSH, sem persistir uma sessão ACP própria.
 
 O [registro de testes reais](agy-acp-probe.md) documenta conversa, ferramentas,

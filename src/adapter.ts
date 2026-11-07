@@ -245,7 +245,8 @@ export class AntigravityAcpAdapter extends LlmAdapter {
           'EMPTY_RESPONSE',
         );
       yield* mapper.end();
-      // ACP usage_update reports current context occupancy, not per-call token billing.
+      // ACP usage_update is context occupancy, reported prompt-side for DSH's meter.
+      yield* mapper.usage();
       completed = stop === 'end_turn';
       yield { type: 'finish', reason: finishReason(stop) };
     } catch (failure) {

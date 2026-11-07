@@ -148,6 +148,7 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
         else if (variant === 'bridge-sequential')
           result = (await call('first')) + '|' + (await call('second'));
         else result = await call('x');
+        update(sid, { sessionUpdate: 'usage_update', used: 40, size: 200000 });
         update(sid, {
           sessionUpdate: 'agent_message_chunk',
           content: { type: 'text', text: 'PROMPTS=' + prompts + ' RESULT=' + result },
