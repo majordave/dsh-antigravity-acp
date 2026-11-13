@@ -1,4 +1,4 @@
-import { LlmError } from '@deepseek-ai/dsh-llm';
+import { acpError } from './acp/errors.js';
 import type { AcpGenerateOptions as GenerateOptions } from './request.js';
 import type { Config } from './config.js';
 export function buildPrompt(options: GenerateOptions, config: Config): string {
@@ -6,18 +6,18 @@ export function buildPrompt(options: GenerateOptions, config: Config): string {
   // selects the thinking tier, so reasoningEffort is intentionally not forwarded.
   for (const key of ['temperature', 'maxTokens'] as const) {
     if (options[key] !== undefined)
-      throw new LlmError(
+      throw acpError(
         `ACP does not expose ${key}. Remove that request option; select an exact model ID for its reasoning tier.`,
         'UNSUPPORTED_OPTION',
       );
   }
   if (options.stop?.length)
-    throw new LlmError('ACP does not expose stop sequences.', 'UNSUPPORTED_OPTION');
+    throw acpError('ACP does not expose stop sequences.', 'UNSUPPORTED_OPTION');
   if (
     config.toolPolicy === 'reject' &&
     (options.tools?.length || options.toolHistory?.tools.length)
   )
-    throw new LlmError(
+    throw acpError(
       'toolPolicy: reject refuses tool schemas. Use the default bridge policy to execute DSH tools.',
       'UNSUPPORTED_OPTION',
     );
@@ -82,7 +82,7 @@ function renderMessages(messages: GenerateOptions['messages']): Rendered[] {
     ...('toolCallId' in m ? { toolCallId: m.toolCallId, isError: m.isError ?? false } : {}),
     content: m.content.map((b) => {
       if (b.type === 'image' || b.type === 'file')
-        throw new LlmError(
+        throw acpError(
           'This version accepts text context only. Attachments must be projected by DSH before calling the adapter.',
           'UNSUPPORTED_OPTION',
         );
@@ -219,7 +219,7 @@ function fitToBudget(
   // 4. Never send an oversized prompt: the server would drop its end silently.
   const size = byteLength(prompt);
   if (size > budget)
-    throw new LlmError(
+    throw acpError(
       `This request is ${Math.ceil(size / 1000)} KB even after condensing the history, above the ${Math.floor(budget / 1000)} KB Antigravity input budget (the server ignores everything past 192 KB). Shorten the latest message or attach the content as a file the model can read with tools.`,
       'ACP_PROMPT_TOO_LARGE',
     );

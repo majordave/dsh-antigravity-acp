@@ -1,16 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import {
-  LlmError,
-  type StreamChunk,
-  type ToolCallBlock,
-  type RequestMessage,
-} from '@deepseek-ai/dsh-llm';
+import { type StreamChunk, type ToolCallBlock, type RequestMessage } from '@deepseek-ai/dsh-llm';
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { AcpClient } from '../acp/client.js';
 import { EventMapper, finishReason } from '../acp/events.js';
 import { lastCallUsage } from '../acp/usage-store.js';
-import { aborted, classify } from '../acp/errors.js';
+import { aborted, acpError, classify } from '../acp/errors.js';
 import {
   buildContinuationPrompt,
   buildPrompt,
@@ -192,7 +187,7 @@ export class ToolSessions {
     b.timer = setTimeout(() => {
       this.fail(
         b,
-        new LlmError(
+        acpError(
           code === 'ACP_TOOL_TIMEOUT'
             ? 'DSH did not return the tool result before the bridge deadline. Retry from the saved DSH conversation.'
             : 'Official ACP generation timed out.',
@@ -254,7 +249,7 @@ export class ToolSessions {
     )
       await this.close(oldest, true);
     if (this.bindings.size >= this.config.maxActiveToolSessions)
-      throw new LlmError(
+      throw acpError(
         'Too many active ACP tool sessions. Finish or cancel an existing turn.',
         'ACP_SESSION_LIMIT',
       );
@@ -283,7 +278,7 @@ export class ToolSessions {
     try {
       await client.start(b.controller.signal);
       if (!client.initializeResult?.agentCapabilities?.mcpCapabilities?.http)
-        throw new LlmError(
+        throw acpError(
           'Official ACP server does not advertise HTTP MCP support.',
           'ACP_MCP_UNSUPPORTED',
         );
@@ -299,7 +294,7 @@ export class ToolSessions {
           else if (!b.trustedAcpIds.has(u.toolCallId))
             this.fail(
               b,
-              new LlmError(
+              acpError(
                 'Antigravity attempted a native tool outside the DSH MCP bridge. The request was cancelled.',
                 'ACP_NATIVE_TOOLS_UNSUPPORTED',
               ),
@@ -319,7 +314,7 @@ export class ToolSessions {
         }
         this.fail(
           b,
-          new LlmError(
+          acpError(
             'Antigravity requested permission for a tool outside the DSH bridge.',
             'ACP_NATIVE_TOOLS_UNSUPPORTED',
           ),
@@ -423,7 +418,7 @@ export class ToolSessions {
           ),
       );
       if (matching.length !== 1 || !hasCall)
-        throw new LlmError(
+        throw acpError(
           'A pending DSH tool call requires exactly one matching assistant call and tool result.',
           'ACP_TOOL_RESULTS_MISSING',
         );
@@ -441,7 +436,7 @@ export class ToolSessions {
       };
     });
     if (!exposed.length)
-      throw new LlmError('The ACP session has no exposed calls to resume.', 'ACP_SESSION_BUSY');
+      throw acpError('The ACP session has no exposed calls to resume.', 'ACP_SESSION_BUSY');
     // ACP has no channel for user messages mid-prompt: context DSH added after
     // the call reaches the model inside the last tool result instead.
     const context = tail.filter((m) => m.role === 'user' && !isHuman(m));
@@ -460,14 +455,14 @@ export class ToolSessions {
     if (!b.pending.size) this.deadline(b, this.config.timeoutMs, 'ACP_TIMEOUT');
   }
   async *stream(o: GenerateOptions): AsyncIterable<StreamChunk> {
-    if (this.disposed) throw new LlmError('ACP adapter disposed.', 'ACP_DISPOSED');
+    if (this.disposed) throw acpError('ACP adapter disposed.', 'ACP_DISPOSED');
     if (o.signal?.aborted) throw aborted();
     let b = this.find(o),
       fresh = !b,
       parked = false,
       completed = false;
     if (b && (!b.sessionId || b.writer))
-      throw new LlmError('This DSH session already has an active generation.', 'ACP_SESSION_BUSY');
+      throw acpError('This DSH session already has an active generation.', 'ACP_SESSION_BUSY');
     let prompt: string;
     try {
       prompt = buildPrompt(o, this.config);
@@ -551,7 +546,7 @@ export class ToolSessions {
         });
       }
       if (!w.mapper.hasText && b.stop === 'end_turn')
-        throw new LlmError('Official ACP server ended without assistant text.', 'EMPTY_RESPONSE');
+        throw acpError('Official ACP server ended without assistant text.', 'EMPTY_RESPONSE');
       yield* w.mapper.end();
       yield* w.mapper.usage(lastCallUsage(this.config.conversationsDir, b.sessionId));
       completed = b.stop === 'end_turn';

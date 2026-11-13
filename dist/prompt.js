@@ -1,16 +1,16 @@
-import { LlmError } from '@deepseek-ai/dsh-llm';
+import { acpError } from './acp/errors.js';
 export function buildPrompt(options, config) {
     // Host reasoning metadata accepts the request field; ACP's exact model ID
     // selects the thinking tier, so reasoningEffort is intentionally not forwarded.
     for (const key of ['temperature', 'maxTokens']) {
         if (options[key] !== undefined)
-            throw new LlmError(`ACP does not expose ${key}. Remove that request option; select an exact model ID for its reasoning tier.`, 'UNSUPPORTED_OPTION');
+            throw acpError(`ACP does not expose ${key}. Remove that request option; select an exact model ID for its reasoning tier.`, 'UNSUPPORTED_OPTION');
     }
     if (options.stop?.length)
-        throw new LlmError('ACP does not expose stop sequences.', 'UNSUPPORTED_OPTION');
+        throw acpError('ACP does not expose stop sequences.', 'UNSUPPORTED_OPTION');
     if (config.toolPolicy === 'reject' &&
         (options.tools?.length || options.toolHistory?.tools.length))
-        throw new LlmError('toolPolicy: reject refuses tool schemas. Use the default bridge policy to execute DSH tools.', 'UNSUPPORTED_OPTION');
+        throw acpError('toolPolicy: reject refuses tool schemas. Use the default bridge policy to execute DSH tools.', 'UNSUPPORTED_OPTION');
     const messages = renderMessages(options.messages);
     const header = [
         'DeepSeek Harness owns this conversation. Produce only the next assistant response using the supplied conversation.',
@@ -65,7 +65,7 @@ function renderMessages(messages) {
         ...('toolCallId' in m ? { toolCallId: m.toolCallId, isError: m.isError ?? false } : {}),
         content: m.content.map((b) => {
             if (b.type === 'image' || b.type === 'file')
-                throw new LlmError('This version accepts text context only. Attachments must be projected by DSH before calling the adapter.', 'UNSUPPORTED_OPTION');
+                throw acpError('This version accepts text context only. Attachments must be projected by DSH before calling the adapter.', 'UNSUPPORTED_OPTION');
             return b; // Preserve historical text, reasoning, tool calls/results and developer updates.
         }),
     }));
@@ -170,7 +170,7 @@ function fitToBudget(messages, originals, render, budget) {
     // 4. Never send an oversized prompt: the server would drop its end silently.
     const size = byteLength(prompt);
     if (size > budget)
-        throw new LlmError(`This request is ${Math.ceil(size / 1000)} KB even after condensing the history, above the ${Math.floor(budget / 1000)} KB Antigravity input budget (the server ignores everything past 192 KB). Shorten the latest message or attach the content as a file the model can read with tools.`, 'ACP_PROMPT_TOO_LARGE');
+        throw acpError(`This request is ${Math.ceil(size / 1000)} KB even after condensing the history, above the ${Math.floor(budget / 1000)} KB Antigravity input budget (the server ignores everything past 192 KB). Shorten the latest message or attach the content as a file the model can read with tools.`, 'ACP_PROMPT_TOO_LARGE');
     return prompt;
 }
 export function sourceKind(message) {
